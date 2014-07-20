@@ -192,6 +192,7 @@ static int64_t timer_period = 10 * TIMER_MILLISECOND * 1000; /* default period i
 struct timeval startime;
 struct timeval endtime;
 int pktlen;
+uint64_t ts_count = 1, ts_total = 0;
 
 /* Print out statistics on packets dropped */
 static void
@@ -240,7 +241,10 @@ print_stats(void)
 		   total_packets_tx,
 		   total_packets_rx,
 		   total_packets_dropped);
-	printf("\nTX Speed = %5.2f Gbps", (double)(total_packets_tx * pktlen * 8) / (double) ((subtime.tv_sec*1000000+subtime.tv_usec) * 1000));
+	printf("\nTX Speed = %5.2f Gbps, RX Speed = %5.2f Gbps, latency count %ld, average %ld", 
+		(double)(total_packets_tx * pktlen * 8) / (double) ((subtime.tv_sec*1000000+subtime.tv_usec) * 1000),
+		(double)(total_packets_rx * pktlen * 8) / (double) ((subtime.tv_sec*1000000+subtime.tv_usec) * 1000),
+		ts_count, ts_total/ts_count);
 	printf("\n====================================================\n");
 }
 
@@ -288,6 +292,22 @@ l2fwd_simple_forward(struct rte_mbuf *m, unsigned portid)
 	ether_addr_copy(&l2fwd_ports_eth_addr[dst_port], &eth->s_addr);
 
 	l2fwd_send_packet(m, (uint8_t) dst_port);
+}
+
+
+static void
+rx_process_pkt(struct rte_mbuf *m)
+{
+	struct timespec timer;
+	clock_gettime(CLOCK_MONOTONIC, &timer);
+	uint64_t now = timer.tv_sec * 1000000 + timer.tv_nsec / 1000;
+	uint64_t ts = *(uint64_t *)((char *)(m->pkt.data) + 100);
+	//if (ts != 0) printf("%ld\n", now-ts);
+	if (ts != 0) {
+		ts_total += now - ts;
+		ts_count ++;
+	}
+	pktlen = m->pkt.data_len;
 }
 
 /* main processing loop */
