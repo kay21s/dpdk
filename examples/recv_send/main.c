@@ -100,7 +100,7 @@
 #define TX_HTHRESH 0  /**< Default values of TX host threshold reg. */
 #define TX_WTHRESH 0  /**< Default values of TX write-back threshold reg. */
 
-#define MAX_PKT_BURST 32
+#define MAX_PKT_BURST 2
 #define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
 
 /*
@@ -241,10 +241,11 @@ print_stats(void)
 		   total_packets_tx,
 		   total_packets_rx,
 		   total_packets_dropped);
-	printf("\nTX Speed = %5.2f Gbps, RX Speed = %5.2f Gbps, latency count %ld, average %ld", 
+	printf("\nTX Speed = %5.2f Gbps, RX Speed = %5.2f Gbps, latency count %ld, rte_get_timer_hz %ld, rte_get_tsc_hz %ld,  average %ld", 
 		(double)(total_packets_tx * pktlen * 8) / (double) ((subtime.tv_sec*1000000+subtime.tv_usec) * 1000),
 		(double)(total_packets_rx * pktlen * 8) / (double) ((subtime.tv_sec*1000000+subtime.tv_usec) * 1000),
-		ts_count, ts_total/ts_count);
+		ts_count, rte_get_timer_hz(), rte_get_tsc_hz(), (ts_total/ts_count)/(rte_get_tsc_hz()/1e6));
+		//ts_count, 0, 0, ts_total/ts_count);
 	printf("\n====================================================\n");
 }
 
@@ -260,9 +261,10 @@ l2fwd_send_burst(struct lcore_queue_conf *qconf, unsigned n, uint8_t port)
 
 	m_table = (struct rte_mbuf **)qconf->tx_mbufs[port].m_table;
 	for (i = 0; i < n; i ++) {
-		clock_gettime(CLOCK_MONOTONIC, &timer);
-		uint64_t now = timer.tv_sec * 1000000 + timer.tv_nsec / 1001;
-		*(uint64_t *)((char *)(m_table[i]->pkt.data) + 100) = now;
+		//clock_gettime(CLOCK_MONOTONIC, &timer);
+		//uint64_t now = timer.tv_sec * 1000000 + timer.tv_nsec / 1001;
+		uint64_t now = rte_rdtsc_precise();
+		*(uint64_t *)((char *)(m_table[i]->pkt.data) + 56) = now;
 	}
 
 	ret = rte_eth_tx_burst(port, (uint16_t) queueid, m_table, (uint16_t) n);
@@ -299,9 +301,10 @@ static void
 rx_process_pkt(struct rte_mbuf *m)
 {
 	struct timespec timer;
-	clock_gettime(CLOCK_MONOTONIC, &timer);
-	uint64_t now = timer.tv_sec * 1000000 + timer.tv_nsec / 1000;
-	uint64_t ts = *(uint64_t *)((char *)(m->pkt.data) + 100);
+	//clock_gettime(CLOCK_MONOTONIC, &timer);
+	//uint64_t now = timer.tv_sec * 1000000 + timer.tv_nsec / 1000;
+	uint64_t now = rte_rdtsc_precise();
+	uint64_t ts = *(uint64_t *)((char *)(m->pkt.data) + 56);
 	//if (ts != 0) printf("%ld\n", now-ts);
 	if (ts != 0) {
 		ts_total += now - ts;
@@ -314,7 +317,7 @@ rx_process_pkt(struct rte_mbuf *m)
 static void
 l2fwd_main_loop(void)
 {
-	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
+	struct rte_mbuf *pkts_burst[MAX_PKT_BURST * 2];
 	struct rte_mbuf *m;
 	unsigned lcore_id;
 	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
@@ -354,19 +357,20 @@ l2fwd_main_loop(void)
 	}
 	pktdata = prep_next_skb(fct, &tmp_pktlen);
 
+	pktlen = tmp_pktlen;
+
 	for (i = 0; i < MAX_PKT_BURST; i ++) {
 		struct rte_mbuf *m = rte_pktmbuf_alloc(l2fwd_pktmbuf_pool);
 		assert (m != NULL);
 		m->pkt.nb_segs = 1;
 		m->pkt.next = NULL;
-		m->pkt.pkt_len = (uint16_t)tmp_pktlen;
-		m->pkt.data_len = (uint16_t)tmp_pktlen;
-		memcpy(m->pkt.data, pktdata, tmp_pktlen);
+		m->pkt.pkt_len = (uint16_t)pktlen;
+		m->pkt.data_len = (uint16_t)pktlen;
+		memcpy(m->pkt.data, pktdata, pktlen);
 		qconf->tx_mbufs[0].m_table[i] = m;
 	}
 	qconf->tx_mbufs[0].len = MAX_PKT_BURST;
 
-	pktlen = tmp_pktlen;
 
 	gettimeofday(&startime, NULL);
 	while (1) {
@@ -413,7 +417,7 @@ l2fwd_main_loop(void)
 
 				portid = qconf->rx_port_list[i];
 				nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
-						pkts_burst, MAX_PKT_BURST);
+						pkts_burst, MAX_PKT_BURST * 2);
 
 				port_statistics[portid].rx += nb_rx;
 
