@@ -1,0 +1,45 @@
+--- main.c	2014-07-21 05:17:45.476354173 +0800
++++ /home/kay/dpdk-1.7.0/examples/recv_send/main.c	2014-07-21 06:00:09.912301935 +0800
+@@ -192,6 +192,7 @@
+ struct timeval startime;
+ struct timeval endtime;
+ int pktlen;
++uint64_t ts_count = 1, ts_total = 0;
+ 
+ /* Print out statistics on packets dropped */
+ static void
+@@ -240,7 +241,10 @@
+ 		   total_packets_tx,
+ 		   total_packets_rx,
+ 		   total_packets_dropped);
+-	printf("\nTX Speed = %5.2f Gbps", (double)(total_packets_tx * pktlen * 8) / (double) ((subtime.tv_sec*1000000+subtime.tv_usec) * 1000));
++	printf("\nTX Speed = %5.2f Gbps, RX Speed = %5.2f Gbps, latency count %ld, average %ld", 
++		(double)(total_packets_tx * pktlen * 8) / (double) ((subtime.tv_sec*1000000+subtime.tv_usec) * 1000),
++		(double)(total_packets_rx * pktlen * 8) / (double) ((subtime.tv_sec*1000000+subtime.tv_usec) * 1000),
++		ts_count, ts_total/ts_count);
+ 	printf("\n====================================================\n");
+ }
+ 
+@@ -290,6 +294,22 @@
+ 	l2fwd_send_packet(m, (uint8_t) dst_port);
+ }
+ 
++
++static void
++rx_process_pkt(struct rte_mbuf *m)
++{
++	struct timespec timer;
++	clock_gettime(CLOCK_MONOTONIC, &timer);
++	uint64_t now = timer.tv_sec * 1000000 + timer.tv_nsec / 1000;
++	uint64_t ts = *(uint64_t *)((char *)(m->pkt.data) + 100);
++	//if (ts != 0) printf("%ld\n", now-ts);
++	if (ts != 0) {
++		ts_total += now - ts;
++		ts_count ++;
++	}
++	pktlen = m->pkt.data_len;
++}
++
+ /* main processing loop */
+ static void
+ l2fwd_main_loop(void)
