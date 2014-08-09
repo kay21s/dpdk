@@ -78,7 +78,7 @@
 #include <unistd.h>
 
 /* Key definitions */
-#define NUM_QUEUE 1
+#define NUM_QUEUE 2
 
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
