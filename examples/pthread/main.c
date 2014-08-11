@@ -132,12 +132,20 @@ struct lcore_queue_conf lcore_queue_conf[NUM_QUEUE];
 
 static const struct rte_eth_conf port_conf = {
 	.rxmode = {
+		.mq_mode = ETH_MQ_RX_RSS,
+		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
 		.header_split   = 0, /**< Header Split disabled */
 		.hw_ip_checksum = 0, /**< IP checksum offload disabled */
 		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
 		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
 		.hw_strip_crc   = 0, /**< CRC stripped by hardware */
+	},
+	.rx_adv_conf = {
+		.rss_conf = {
+			.rss_key = NULL,
+			.rss_hf = ETH_RSS_IP,
+		},
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -167,7 +175,8 @@ static const struct rte_eth_txconf tx_conf = {
 	.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS | ETH_TXQ_FLAGS_NOOFFLOADS,
 };
 
-struct rte_mempool * l2fwd_pktmbuf_pool = NULL;
+struct rte_mempool * l2fwd_pktmbuf_pool[NUM_QUEUE];
+struct rte_mempool * send_pktmbuf_pool;
 #define NUM_MAX_CORE 32
 /* Per-port statistics struct */
 struct l2fwd_core_statistics {
@@ -235,6 +244,10 @@ print_stats(void)
 		total_packets_dropped += core_statistics[core_id].dropped;
 		total_packets_tx += core_statistics[core_id].tx;
 		total_packets_rx += core_statistics[core_id].rx;
+
+		core_statistics[core_id].tx = 0;
+		core_statistics[core_id].rx = 0;
+		core_statistics[core_id].dropped = 0;
 	}
 
 	for (queue_id = 0; queue_id < NUM_QUEUE; queue_id ++) {
@@ -256,6 +269,7 @@ print_stats(void)
 			total_latency_cnt, (total_latency/total_latency_cnt)/(rte_get_tsc_hz()/1e6));
 	printf("\n====================================================\n");
 	
+	gettimeofday(&startime, NULL);
 }
 
 /* main processing loop */
@@ -293,7 +307,7 @@ void *tx_loop(context_t *context)
 	}
 
 	for (i = 0; i < MAX_PKT_BURST; i ++) {
-		m = rte_pktmbuf_alloc(l2fwd_pktmbuf_pool);
+		m = rte_pktmbuf_alloc(send_pktmbuf_pool);
 		assert (m != NULL);
 		m->pkt.nb_segs = 1;
 		m->pkt.next = NULL;
@@ -594,6 +608,7 @@ int
 MAIN(int argc, char **argv)
 {
 	int ret;
+	int i;
 	uint8_t nb_ports;
 	uint8_t portid, queue_id;
 
@@ -609,15 +624,29 @@ MAIN(int argc, char **argv)
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid L2FWD arguments\n");
 
+	char str[10];
 	/* create the mbuf pool */
-	l2fwd_pktmbuf_pool =
-		rte_mempool_create("mbuf_pool", NB_MBUF,
-				   MBUF_SIZE, 32,
-				   sizeof(struct rte_pktmbuf_pool_private),
-				   rte_pktmbuf_pool_init, NULL,
-				   rte_pktmbuf_init, NULL,
-				   rte_socket_id(), 0);
-	if (l2fwd_pktmbuf_pool == NULL)
+	for(i = 0; i < NUM_QUEUE; i ++) {
+		sprintf(str, "%d", i);
+		l2fwd_pktmbuf_pool[i] =
+			rte_mempool_create(str, NB_MBUF,
+					MBUF_SIZE, 32,
+					sizeof(struct rte_pktmbuf_pool_private),
+					rte_pktmbuf_pool_init, NULL,
+					rte_pktmbuf_init, NULL,
+					rte_socket_id(), 0);
+		if (l2fwd_pktmbuf_pool[i] == NULL)
+			rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
+	}
+
+	send_pktmbuf_pool =
+		rte_mempool_create("send_mbuf_pool", NB_MBUF,
+				MBUF_SIZE, 32,
+				sizeof(struct rte_pktmbuf_pool_private),
+				rte_pktmbuf_pool_init, NULL,
+				rte_pktmbuf_init, NULL,
+				rte_socket_id(), 0);
+	if (send_pktmbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
 
 	if (rte_eal_pci_probe() < 0)
@@ -639,7 +668,7 @@ MAIN(int argc, char **argv)
 			/* init RX queues */
 			ret = rte_eth_rx_queue_setup(portid, queue_id, nb_rxd,
 					rte_eth_dev_socket_id(portid), &rx_conf,
-					l2fwd_pktmbuf_pool);
+					l2fwd_pktmbuf_pool[queue_id]);
 			if (ret < 0)
 				rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup:err=%d, port=%u\n",
 						ret, (unsigned) portid);
@@ -669,7 +698,6 @@ MAIN(int argc, char **argv)
 
 	check_all_ports_link_status(nb_ports, 0);
 
-	int i;
 	for (i = 0; i < NUM_QUEUE; i ++) {
 		ts_total[i] = 0;
 		ts_count[i] = 1;
